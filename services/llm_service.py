@@ -187,9 +187,10 @@ def _generate(prompt: str, task_name: str) -> str:
     if backend == "gemini":
         return _generate_with_gemini(prompt, task_name)
 
-    # auto mode: prefer local/free first, then Gemini.
+    # auto mode: Gemini first (better quality), Ollama as fallback when Gemini
+    # quota is exhausted or API key is missing.
     last_error = None
-    for engine in ("ollama", "gemini"):
+    for engine in ("gemini", "ollama"):
         try:
             if engine == "ollama":
                 return _generate_with_ollama(prompt, task_name)
@@ -296,3 +297,53 @@ def generate_session_summary(session_data: dict) -> str:
     except Exception:
         logger.warning("LLM summary failed; using rule-based summary")
         return _rule_based_summary(session_data)
+
+
+# ---------------------------------------------------------------------------
+# Health check – call this at startup or from the UI to verify backends
+# ---------------------------------------------------------------------------
+
+def check_backends() -> dict:
+    """
+    Test which LLM backends are reachable right now.
+
+    Returns a dict like:
+        {
+            "gemini": True | False | "quota",
+            "ollama": True | False,
+            "rule_based": True,          # always available
+        }
+
+    Useful for displaying a status indicator in the UI.
+    """
+    result = {"gemini": False, "ollama": False, "rule_based": True}
+
+    # --- Gemini ---
+    try:
+        if time.time() < _gemini_disabled_until:
+            result["gemini"] = "quota"
+        else:
+            _get_gemini_client()   # just check init – no actual API call
+            result["gemini"] = True
+    except Exception as e:
+        logger.debug("Gemini check failed: %s", e)
+        result["gemini"] = False
+
+    # --- Ollama ---
+    try:
+        url = f"{_ollama_base_url()}/api/tags"
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=3):
+            pass
+        result["ollama"] = True
+    except Exception as e:
+        logger.debug("Ollama check failed: %s", e)
+        result["ollama"] = False
+
+    active = (
+        "Gemini" if result["gemini"] is True
+        else "Ollama" if result["ollama"]
+        else "Rule-based fallback"
+    )
+    logger.info("LLM backend check: %s | active=%s", result, active)
+    return result
