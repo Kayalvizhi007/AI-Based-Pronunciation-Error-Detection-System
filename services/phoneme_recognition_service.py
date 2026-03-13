@@ -339,6 +339,17 @@ def _run_inference(audio_path: str | Path) -> List[str]:
     processor, model = _get_model()
     audio_np = _load_audio_as_float32(audio_path)
 
+    # perform basic normalization & noise reduction to improve robustness in
+    # noisy environments (user complaints indicated recognition fails when the
+    # speaker is in a noisy area).
+    try:
+        from infrastructure.audio_processing import normalise, denoise
+
+        audio_np = normalise(audio_np)
+        audio_np = denoise(audio_np)
+    except ImportError:
+        logger.debug("could not import audio_processing helpers; skipping denoise")
+
     if len(audio_np) < SAMPLE_RATE * 0.08:   # < 80 ms – too short
         logger.warning("Audio clip too short (%d samples); returning []", len(audio_np))
         return []

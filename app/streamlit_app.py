@@ -76,7 +76,8 @@ def _reset():
     st.session_state.corrected        = ""
     st.session_state.report           = None
     st.session_state.audio_path       = None
-    st.session_state.stage            = "record"
+    st.session_state.stage            = "login"
+    st.session_state.user             = None
 
 
 if "stage" not in st.session_state:
@@ -84,24 +85,129 @@ if "stage" not in st.session_state:
 
 
 def _save_audio(uploaded) -> Path:
+    """Save uploaded audio bytes to a clean 16 kHz mono WAV file.
+
+    Streamlit may deliver audio in different sample rates or stereo; this
+    ensures we standardize the format for consistent Whisper transcription.
+    """
     data = uploaded.read()
-    tmp  = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-    tmp.write(data)
-    tmp.close()
-    return Path(tmp.name)
+
+    try:
+        import io
+        import numpy as np
+        import soundfile as sf
+        from scipy.signal import resample
+
+        buf = io.BytesIO(data)
+        audio, sr = sf.read(buf, dtype="float32")
+        if audio.ndim > 1:
+            audio = audio.mean(axis=1)
+
+        # Resample to 16 kHz if needed
+        target_sr = 16000
+        if sr != target_sr:
+            num = int(len(audio) * target_sr / sr)
+            audio = resample(audio, num)
+            sr = target_sr
+
+        # Normalize loudness to avoid clipping / low volume
+        peak = np.max(np.abs(audio))
+        if peak > 0:
+            audio = audio / peak
+
+        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        tmp.close()
+        sf.write(str(tmp.name), audio, sr, subtype="PCM_16")
+        return Path(tmp.name)
+    except Exception:
+        # Fallback to raw bytes if conversion fails
+        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        tmp.write(data)
+        tmp.close()
+        return Path(tmp.name)
 
 
 analyzer: PronunciationAnalyzer = st.session_state.analyzer
 
 # ── Header ─────────────────────────────────────────────────────────────────
-st.title("🗣️ Pronunciation Checker")
-st.caption("Record → get instant phoneme-level feedback on every word.")
+if st.session_state.stage in ["login", "register"]:
+    st.title("🗣️ Pronunciation Checker - Login")
+    st.caption("Please log in or register to continue.")
+else:
+    st.title("🗣️ Pronunciation Checker")
+    st.caption("Record → get instant phoneme-level feedback on every word.")
 st.divider()
 
 # ==========================================================================
-# STAGE 1 – RECORD
+# STAGE 1 – LOGIN
 # ==========================================================================
-if st.session_state.stage == "record":
+if st.session_state.stage == "login":
+    st.subheader("Login")
+    username = st.text_input("Username", key="login_username")
+    password = st.text_input("Password", type="password", key="login_password")
+    if st.button("Login", type="primary"):
+        # Simple check, in real app use database
+        if username and password:
+            st.session_state.user = username
+            st.session_state.stage = "main"
+            st.rerun()
+        else:
+            st.error("Invalid credentials")
+    if st.button("New User? Register"):
+        st.session_state.stage = "register"
+        st.rerun()
+
+# ==========================================================================
+# STAGE 2 – REGISTER
+# ==========================================================================
+elif st.session_state.stage == "register":
+    st.subheader("Register")
+    full_name = st.text_input("Full Name", key="reg_full_name")
+    email = st.text_input("Email ID", key="reg_email")
+    password = st.text_input("Password", type="password", key="reg_password")
+    confirm_password = st.text_input("Confirm Password", type="password", key="reg_confirm_password")
+    if st.button("Register", type="primary"):
+        import re
+        if not full_name or not email or not password:
+            st.error("All fields required")
+        elif password != confirm_password:
+            st.error("Passwords do not match")
+        elif not re.match(r"[^@]+@[^@]+\.[^@]+", email):
+            st.error("Invalid email")
+        elif len(password) < 6 or not re.search(r"[a-zA-Z]{6,}", password) or not re.search(r"[^a-zA-Z0-9]", password):
+            st.error("Password must be at least 6 letters and contain 1 symbol")
+        else:
+            # Register user, in real app save to db
+            st.session_state.user = full_name
+            st.session_state.stage = "main"
+            st.success("Registered successfully!")
+            st.rerun()
+    if st.button("Back to Login"):
+        st.session_state.stage = "login"
+        st.rerun()
+
+# ==========================================================================
+# STAGE 3 – MAIN MENU
+# ==========================================================================
+elif st.session_state.stage == "main":
+    st.subheader(f"Welcome, {st.session_state.user}!")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("👤 Profile Viewer", use_container_width=True):
+            st.info("Profile feature coming soon!")
+        if st.button("🎙️ Record Speech", use_container_width=True):
+            st.session_state.stage = "record"
+            st.rerun()
+    with col2:
+        if st.button("📊 User Status", use_container_width=True):
+            st.info("Status feature coming soon!")
+        if st.button("📈 Score Details", use_container_width=True):
+            st.info("Scores feature coming soon!")
+
+# ==========================================================================
+# STAGE 4 – RECORD (existing)
+# ==========================================================================
+elif st.session_state.stage == "record":
     st.subheader("Step 1 — Record your sentence")
     st.info("Click the mic, speak any English sentence clearly, then stop.")
 
@@ -126,6 +232,13 @@ if st.session_state.stage == "record":
 # ==========================================================================
 elif st.session_state.stage == "confirm":
     st.subheader("Step 2 — Confirm what you said")
+
+    # Provide audio playback so the user can verify the recording
+    if st.session_state.audio_path:
+        st.markdown("**Playback the recording:**")
+        with open(st.session_state.audio_path, "rb") as f:
+            st.audio(f.read(), format="audio/wav")
+        st.divider()
 
     col_raw, col_edit = st.columns(2)
     with col_raw:
@@ -194,6 +307,7 @@ elif st.session_state.stage == "report":
     with btn_col:
         if st.button("📊 View Full Report →", type="primary",
                      use_container_width=True, key="report_btn_top"):
+            # Streamlit multisession expects a file path relative to the app directory
             st.switch_page("pages/2_Overall_Report.py")
 
     st.divider()

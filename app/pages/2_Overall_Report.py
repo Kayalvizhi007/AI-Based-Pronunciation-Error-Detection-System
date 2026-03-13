@@ -82,6 +82,7 @@ st.markdown("""
 if "report" not in st.session_state or st.session_state.report is None:
     st.warning("No report found. Please record and analyse a sentence first.")
     if st.button("← Go to Pronunciation Checker"):
+        # Main app entry is in app/streamlit_app.py
         st.switch_page("streamlit_app.py")
     st.stop()
 
@@ -192,6 +193,14 @@ if report.overall_suggestion:
     st.subheader("🎓 Coach's Feedback")
     st.info(report.overall_suggestion)
     st.divider()
+
+# ── Improvement Points (Fast Action Plan) ──────────────────────────────────
+from services import feedback_service
+
+st.subheader("🧭 Quick Improvement Points")
+for point in feedback_service.session_feedback_points(report):
+    st.markdown(f"- {point}")
+st.divider()
 
 # ── Word score bar chart ───────────────────────────────────────────────────
 st.subheader("📈 Word-by-Word Score Breakdown")
@@ -332,6 +341,13 @@ if weak_words:
             if wr.suggestion:
                 st.markdown("**💡 Tutor tip:**")
                 st.success(wr.suggestion)
+
+            # Additional structured improvement points
+            points = feedback_service.word_feedback_points(wr.word, wr.errors)
+            if points:
+                st.markdown("**📝 Quick practice tips:**")
+                for p in points:
+                    st.markdown(f"- {p}")
 
             # Correct pronunciation audio
             try:

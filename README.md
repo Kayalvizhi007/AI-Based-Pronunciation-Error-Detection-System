@@ -23,7 +23,12 @@ Then open `http://localhost:8501`.
    - `LLM_BACKEND=ollama` for a local LLM
 3. Start the app with `python run.py`
 4. Record a sentence in the browser and review the word-level report
-
+> **Noise handling**: the backend now applies basic noise reduction and peak
+> normalization to recorded audio before both transcription and phoneme
+> decoding.  This helps the system focus on the user’s speech even when the
+> recording contains background hiss.  Despite the preprocessing, very loud
+> or overlapping noises will still degrade accuracy – using a quieter room or
+> a headset microphone is the most reliable fix.
 You do not need to copy `.env.example` manually. The setup and launcher scripts handle that.
 
 ## Useful Commands
@@ -37,12 +42,15 @@ python diagnose_ipa.py     # verify IPA -> ARPAbet parsing
 
 ## What the App Does
 
-1. Records speech from the browser.
-2. Transcribes the audio with Whisper.
-3. Lets the learner confirm or edit the sentence.
-4. Aligns words and phonemes with MFA, Whisper timestamps, or wav2vec2 fallbacks.
-5. Compares expected and detected phonemes per word.
-6. Generates coaching feedback and an overall report.
+1. Shows a **login / registration screen** before you start.
+2. Records speech through your browser (microphone access required).
+3. Transcribes the audio with Whisper and displays the detected text.
+4. Lets the learner edit the detected text before running pronunciation analysis.
+5. Aligns words and phonemes using timestamps + optional MFA alignment.
+6. Compares expected and detected phonemes per word and generates:
+   - Per-word phoneme comparison (expected vs detected)
+   - Clear feedback & improvement tips
+   - A score with emoji-based feedback and a final report
 
 ## Configuration
 

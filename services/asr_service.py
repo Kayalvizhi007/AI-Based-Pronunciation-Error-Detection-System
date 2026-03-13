@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 _model = None
 _backend_in_use = None
 
-_model_size       = os.getenv("WHISPER_MODEL", "base").split("#", 1)[0].strip()
+_model_size       = os.getenv("WHISPER_MODEL", "tiny.en").split("#", 1)[0].strip()
 _preferred_backend = os.getenv("ASR_BACKEND", "faster_whisper").strip().lower()
 _device           = os.getenv("WHISPER_DEVICE", "cpu").strip().lower()
 _compute_type     = os.getenv("WHISPER_COMPUTE_TYPE", "int8").strip().lower()
@@ -85,18 +85,59 @@ def _get_model():
 # Plain transcription (unchanged public API)
 # ---------------------------------------------------------------------------
 
+def _preprocess_for_asr(audio_path: str | Path) -> str:
+    """Return a (possibly temporary) WAV file path suitable for ASR.
+
+    This allows us to normalise and run the same lightweight noise reduction we
+    applied during phoneme recognition.  Whisper-style models accept a file
+    path, so we write the cleaned audio to a temp file and pass that along.  If
+    the preprocessing helpers are unavailable the original path is returned.
+    """
+    try:
+        from infrastructure.audio_processing import load_wav, SAMPLE_RATE
+        import scipy.io.wavfile as wavfile
+
+        audio = load_wav(audio_path)
+        # convert float32 [-1,1] back to int16 for WAV encoding
+        int16 = (audio * 32767).astype("int16")
+        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        tmp.close()
+        wavfile.write(tmp.name, SAMPLE_RATE, int16)
+        return tmp.name
+    except Exception:
+        # log at debug level but don't crash if something goes wrong
+        logger.debug("ASR preprocessing skipped for %s", audio_path)
+        return str(audio_path)
+
+
 def transcribe_audio(audio_path: str | Path) -> str:
     """Transcribe audio and return plain text."""
     model, backend = _get_model()
-    logger.info("Transcribing via %s: %s", backend, audio_path)
+    preprocessed = _preprocess_for_asr(audio_path)
+    logger.info("Transcribing via %s: %s", backend, preprocessed)
     t0 = time.perf_counter()
 
-    if backend == "faster_whisper":
-        segments, _ = model.transcribe(str(audio_path), language="en")
-        text = " ".join(s.text.strip() for s in segments).strip()
-    else:
-        result = model.transcribe(str(audio_path), language="en", fp16=False)
-        text = result["text"].strip()
+    try:
+        if backend == "faster_whisper":
+            # Greedy decoding is faster and usually sufficient for short phrases
+            segments, _ = model.transcribe(
+                str(preprocessed),
+                language="en",
+                beam_size=1,
+                best_of=1,
+            )
+            text = " ".join(s.text.strip() for s in segments).strip()
+        else:
+            # openai-whisper is slower; keep fp16 off for CPU
+            result = model.transcribe(str(preprocessed), language="en", fp16=False)
+            text = result["text"].strip()
+    finally:
+        # remove temporary file if we created one
+        if preprocessed != str(audio_path):
+            try:
+                os.unlink(preprocessed)
+            except Exception:
+                logger.debug("Failed to remove temp ASR file %s", preprocessed)
 
     logger.info("Transcription done in %.2fs: %r", time.perf_counter() - t0, text)
     return text
@@ -133,11 +174,12 @@ def transcribe_with_word_timestamps(
     logger.info("Transcribing with word timestamps via %s: %s", backend, audio_path)
     t0 = time.perf_counter()
 
+    preprocessed = _preprocess_for_asr(audio_path)
     try:
         if backend == "faster_whisper":
-            text, words = _timestamps_faster_whisper(model, str(audio_path))
+            text, words = _timestamps_faster_whisper(model, str(preprocessed))
         else:
-            text, words = _timestamps_openai_whisper(model, str(audio_path))
+            text, words = _timestamps_openai_whisper(model, str(preprocessed))
 
         logger.info(
             "Timestamps done in %.2fs: %d words, text=%r",
@@ -151,6 +193,12 @@ def transcribe_with_word_timestamps(
         )
         text = transcribe_audio(audio_path)
         return text, []
+    finally:
+        if preprocessed != str(audio_path):
+            try:
+                os.unlink(preprocessed)
+            except Exception:
+                logger.debug("Failed to remove temp ASR file %s", preprocessed)
 
 
 def _timestamps_faster_whisper(
@@ -160,6 +208,8 @@ def _timestamps_faster_whisper(
         audio_path,
         language="en",
         word_timestamps=True,   # ← key flag
+        beam_size=1,
+        best_of=1,
     )
     words: List[WordTimestamp] = []
     parts: List[str] = []
