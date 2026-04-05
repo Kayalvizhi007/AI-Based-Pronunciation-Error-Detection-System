@@ -1,0 +1,33 @@
+# Core UI
+streamlit>=1.35.0
+
+# ASR
+openai-whisper>=20231117
+
+# Phoneme recognition – reads actual phonemes from audio (critical for error detection)
+transformers>=4.40.0
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# Phoneme dictionary
+nltk>=3.8
+
+# Forced alignment (MFA via conda; this pip package is for parsing output)
+textgrid>=1.5
+
+# LLM
+google-generativeai>=0.5.0
+
+# TTS – voice playback in browser
+gTTS>=2.5.0
+pyttsx3>=2.90
+
+# Audio recording & processing
+sounddevice>=0.4.6
+scipy>=1.12.0
+numpy>=1.26.0
+pydub>=0.25.1
+soundfile>=0.12.1
+
+# Utilities
+python-dotenv>=1.0.0
